@@ -1,0 +1,348 @@
+openapi: 3.1.0
+
+info:
+  title: 期末复习助手 API
+  version: 0.1.0
+  description: |
+    T01 阶段的接口契约初稿（B2）。只包含两个接口，用于和示例数据对齐。
+
+    全文约定（两人必须遵守）：
+    1. 字段名一律 snake_case（`exam_date`，不是 `examDate`）
+    2. 日期字符串一律 `YYYY-MM-DD`，时间点一律带时区 ISO 8601（`2026-12-20T01:00:00Z`）
+    3. 所有成功响应包一层 `data` 与 `meta`；失败响应只有 `error`
+    4. 写操作带 `Idempotency-Key` 请求头；修改操作带 `expected_version`
+    5. 本机后端只监听 127.0.0.1，基址为 /api/v1
+  x-status: draft
+  x-owner: TBD
+
+servers:
+  - url: http://127.0.0.1:8000/api/v1
+    description: 本机后端（开发）
+
+tags:
+  - name: courses
+    description: 课程
+  - name: scopes
+    description: 考试范围
+
+paths:
+  /courses:
+    post:
+      tags: [courses]
+      operationId: createCourse
+      summary: 创建课程
+      description: |
+        只填课程名即可创建，资料以后再加。
+        同名课程返回 409，前端提示“已有同名课程，是否打开它”，不自动合并。
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CourseCreateRequest'
+            example:
+              name: 高等数学
+              description: 2026 秋季学期
+      responses:
+        '201':
+          description: 创建成功
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, meta]
+                properties:
+                  data:
+                    $ref: '#/components/schemas/Course'
+                  meta:
+                    $ref: '#/components/schemas/Meta'
+              example:
+                data:
+                  id: crs_01
+                  name: 高等数学
+                  description: 2026 秋季学期
+                  created_at: '2026-11-01T08:00:00Z'
+                  archived_at: null
+                meta:
+                  request_id: req_01
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '409':
+          description: 同名课程已存在
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error:
+                  code: VALIDATION_ERROR
+                  message: 已存在同名课程「高等数学」
+                  details:
+                    reason: duplicate_name
+                    existing_course_id: crs_00
+                  request_id: req_01
+
+  /exams/{examId}/scope-draft:
+    put:
+      tags: [scopes]
+      operationId: saveScopeDraft
+      summary: 保存考试范围草稿
+      description: |
+        覆盖式保存整份草稿，不是增量补丁。
+        草稿可以为空（用户清空了勾选），但空草稿不能拿去确认——确认是另一个接口。
+        expected_version 不匹配时返回 409，前端必须展示差异让用户选择，不能静默覆盖。
+        该操作幂等：同一个 Idempotency-Key 重复提交只产生一次版本递增。
+      parameters:
+        - name: examId
+          in: path
+          required: true
+          schema:
+            type: string
+          example: exam_01
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ScopeDraftWriteRequest'
+            example:
+              expected_version: 0
+              items:
+                - point_id: kp_01
+                  included: true
+                  priority: key
+                - point_id: kp_02
+                  included: true
+                  priority: normal
+                - point_id: kp_03
+                  included: false
+                  priority: normal
+      responses:
+        '200':
+          description: 已保存
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, meta]
+                properties:
+                  data:
+                    $ref: '#/components/schemas/ScopeDraft'
+                  meta:
+                    $ref: '#/components/schemas/Meta'
+              example:
+                data:
+                  exam_id: exam_01
+                  draft_version: 1
+                  included_count: 2
+                  key_count: 1
+                  updated_at: '2026-11-01T08:05:00Z'
+                meta:
+                  request_id: req_02
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          description: 知识点不存在或不属于该课程
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error:
+                  code: VALIDATION_ERROR
+                  message: 知识点 kp_99 不属于本课程
+                  details:
+                    invalid_point_ids: [kp_99]
+                  request_id: req_02
+
+components:
+  parameters:
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: false
+      description: 客户端生成的唯一键，防止连点产生重复记录。建议 UUID。
+      schema:
+        type: string
+      example: 9f1c2b7e-3a4d-4c8e-9b2a-1d5e6f7a8b9c
+
+  responses:
+    ValidationError:
+      description: 输入不合法
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error:
+              code: VALIDATION_ERROR
+              message: 课程名不能为空
+              details:
+                field: name
+              request_id: req_01
+    NotFound:
+      description: 资源不存在
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error:
+              code: VALIDATION_ERROR
+              message: 找不到这场考试
+              details:
+                exam_id: exam_99
+              request_id: req_02
+    Conflict:
+      description: 版本冲突，别人先改过了
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error:
+              code: VERSION_CONFLICT
+              message: 范围草稿已有更新，请查看差异后重试
+              details:
+                current_version: 3
+                your_version: 2
+              request_id: req_02
+
+  schemas:
+    CourseCreateRequest:
+      type: object
+      required: [name]
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+          description: 课程名，去掉首尾空格后不能为空
+        description:
+          type: [string, 'null']
+          maxLength: 500
+
+    Course:
+      type: object
+      required: [id, name, created_at]
+      properties:
+        id:
+          type: string
+          description: 不可复用的字符串主键
+        name:
+          type: string
+        description:
+          type: [string, 'null']
+        created_at:
+          type: string
+          format: date-time
+        archived_at:
+          type: [string, 'null']
+          format: date-time
+          description: 归档时间；归档不等于删除，历史引用仍然有效
+
+    ScopeDraftWriteRequest:
+      type: object
+      required: [items, expected_version]
+      additionalProperties: false
+      properties:
+        expected_version:
+          type: integer
+          minimum: 0
+          description: 客户端当前持有的草稿版本；0 表示还没保存过
+        items:
+          type: array
+          description: 整份草稿的完整快照，未列出的知识点视为未纳入
+          items:
+            $ref: '#/components/schemas/ScopeItemWrite'
+
+    ScopeItemWrite:
+      type: object
+      required: [point_id, included]
+      additionalProperties: false
+      properties:
+        point_id:
+          type: string
+        included:
+          type: boolean
+          description: 是否纳入本次考试范围
+        priority:
+          type: string
+          enum: [normal, key]
+          default: normal
+
+    ScopeDraft:
+      type: object
+      required: [exam_id, draft_version, updated_at]
+      properties:
+        exam_id:
+          type: string
+        draft_version:
+          type: integer
+          description: 每次成功保存加 1，用于下次 expected_version
+        included_count:
+          type: integer
+        key_count:
+          type: integer
+        updated_at:
+          type: string
+          format: date-time
+
+    Meta:
+      type: object
+      required: [request_id]
+      properties:
+        request_id:
+          type: string
+          description: 用于对照后端日志定位问题
+        version:
+          type: integer
+          description: 资源当前版本，便于前端决定下次传什么 expected_version
+
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message, request_id]
+          properties:
+            code:
+              type: string
+              enum:
+                - VALIDATION_ERROR
+                - VERSION_CONFLICT
+                - SOURCE_UNAVAILABLE
+                - OCR_LOW_CONFIDENCE
+                - ANSWER_KEY_MISSING
+                - GRADING_NEEDS_REVIEW
+                - AI_TIMEOUT
+                - PLAN_INFEASIBLE
+                - STORAGE_ERROR
+            message:
+              type: string
+              description: 直接给用户看的中文说明，不要写英文技术报错
+            details:
+              type: object
+              additionalProperties: true
+              description: 结构化补充信息，供前端做针对性处理
+            request_id:
+              type: string
+
+x-next-batch:
+  description: B1 映射里还有两个接口本轮没写，下一轮补上，互审时要明确说出来
+  endpoints:
+    - method: GET
+      path: /courses/{courseId}/points
+      purpose: 考试范围页加载章节树与自评
+    - method: POST
+      path: /exams/{examId}/plan-previews
+      purpose: 生成计划预览，返回 202 与 job_id，不写正式计划
