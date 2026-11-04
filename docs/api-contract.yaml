@@ -2,18 +2,18 @@ openapi: 3.1.0
 
 info:
   title: 期末复习助手 API
-  version: 0.1.0
+  version: 0.3.0
   description: |
-    T01 阶段的接口契约初稿（B2）。只包含两个接口，用于和示例数据对齐。
+    T01 阶段的接口契约草案（B2）。覆盖建课、知识点、考试范围、全局日程、计划预览、应用、撤销和任务执行。
 
     全文约定（两人必须遵守）：
     1. 字段名一律 snake_case（`exam_date`，不是 `examDate`）
     2. 日期字符串一律 `YYYY-MM-DD`，时间点一律带时区 ISO 8601（`2026-12-20T01:00:00Z`）
     3. 所有成功响应包一层 `data` 与 `meta`；失败响应只有 `error`
-    4. 写操作带 `Idempotency-Key` 请求头；修改操作带 `expected_version`
+    4. 写操作带 `Idempotency-Key` 请求头；修改操作带对应资源的期望版本号
     5. 本机后端只监听 127.0.0.1，基址为 /api/v1
   x-status: draft
-  x-owner: TBD
+  x-owner: 双人互审
 
 servers:
   - url: http://127.0.0.1:8000/api/v1
@@ -24,9 +24,29 @@ tags:
     description: 课程
   - name: scopes
     description: 考试范围
+  - name: points
+    description: 知识点与自评
+  - name: exams
+    description: 考试
+  - name: availability
+    description: 全局可学习时间
+  - name: plans
+    description: 计划预览、应用、撤销和任务执行
+  - name: jobs
+    description: 长任务状态
 
 paths:
   /courses:
+    get:
+      tags: [courses]
+      operationId: listCourses
+      summary: 读取课程列表，空数据返回 200 和空数组
+      responses:
+        '200':
+          description: 课程列表
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CourseListResponse' }
     post:
       tags: [courses]
       operationId: createCourse
@@ -60,7 +80,7 @@ paths:
                     $ref: '#/components/schemas/Meta'
               example:
                 data:
-                  id: crs_01
+                  id: course_1
                   name: 高等数学
                   description: 2026 秋季学期
                   created_at: '2026-11-01T08:00:00Z'
@@ -77,14 +97,27 @@ paths:
                 $ref: '#/components/schemas/Error'
               example:
                 error:
-                  code: VALIDATION_ERROR
+                  code: DUPLICATE_COURSE
                   message: 已存在同名课程「高等数学」
                   details:
                     reason: duplicate_name
-                    existing_course_id: crs_00
+                    existing_course_id: course_1
                   request_id: req_01
 
-  /exams/{examId}/scope-draft:
+  /exams/{exam_id}/scope-draft:
+    get:
+      tags: [scopes]
+      operationId: getScopeDraft
+      summary: 读取考试范围草稿；首次读取返回第 0 版空草稿
+      parameters:
+        - $ref: '#/components/parameters/ExamId'
+      responses:
+        '200':
+          description: 草稿
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ScopeDraftResponse' }
+        '404': { $ref: '#/components/responses/NotFound' }
     put:
       tags: [scopes]
       operationId: saveScopeDraft
@@ -95,12 +128,7 @@ paths:
         expected_version 不匹配时返回 409，前端必须展示差异让用户选择，不能静默覆盖。
         该操作幂等：同一个 Idempotency-Key 重复提交只产生一次版本递增。
       parameters:
-        - name: examId
-          in: path
-          required: true
-          schema:
-            type: string
-          example: exam_01
+        - $ref: '#/components/parameters/ExamId'
         - $ref: '#/components/parameters/IdempotencyKey'
       requestBody:
         required: true
@@ -111,13 +139,13 @@ paths:
             example:
               expected_version: 0
               items:
-                - point_id: kp_01
-                  included: true
-                  priority: key
-                - point_id: kp_02
+                - point_id: point_1
                   included: true
                   priority: normal
-                - point_id: kp_03
+                - point_id: point_2
+                  included: true
+                  priority: important
+                - point_id: point_3
                   included: false
                   priority: normal
       responses:
@@ -135,10 +163,14 @@ paths:
                     $ref: '#/components/schemas/Meta'
               example:
                 data:
-                  exam_id: exam_01
+                  exam_id: exam_1
                   draft_version: 1
                   included_count: 2
-                  key_count: 1
+                  important_count: 1
+                  items:
+                    - { point_id: point_1, included: true, priority: normal }
+                    - { point_id: point_2, included: true, priority: important }
+                    - { point_id: point_3, included: false, priority: normal }
                   updated_at: '2026-11-01T08:05:00Z'
                 meta:
                   request_id: req_02
@@ -157,21 +189,377 @@ paths:
               example:
                 error:
                   code: VALIDATION_ERROR
-                  message: 知识点 kp_99 不属于本课程
+                  message: 知识点 point_99 不属于本课程
                   details:
-                    invalid_point_ids: [kp_99]
+                    invalid_point_ids: [point_99]
                   request_id: req_02
+
+  /courses/{course_id}/points:
+    get:
+      tags: [points]
+      operationId: listPoints
+      summary: 读取课程知识点及独立的用户自评、AI 建议
+      parameters:
+        - $ref: '#/components/parameters/CourseId'
+      responses:
+        '200':
+          description: 没有知识点时 data.points 为空数组
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PointListResponse' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    post:
+      tags: [points]
+      operationId: createPoint
+      summary: 手动增加知识点
+      parameters:
+        - $ref: '#/components/parameters/CourseId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PointCreateRequest' }
+      responses:
+        '201':
+          description: 已创建
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PointResponse' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /points/{point_id}/self-status:
+    put:
+      tags: [points]
+      operationId: updateSelfStatus
+      summary: 用户主动修改自评；AI 评估不通过此接口写入
+      parameters:
+        - $ref: '#/components/parameters/PointId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SelfStatusWriteRequest' }
+      responses:
+        '200':
+          description: 自评已保存
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PointResponse' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /courses/{course_id}/exams:
+    get:
+      tags: [exams]
+      operationId: listExams
+      summary: 读取课程考试列表
+      parameters:
+        - $ref: '#/components/parameters/CourseId'
+      responses:
+        '200':
+          description: 考试列表
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ExamListResponse' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    post:
+      tags: [exams]
+      operationId: createExam
+      summary: 创建考试；每日可学习分钟存全局日程
+      parameters:
+        - $ref: '#/components/parameters/CourseId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ExamCreateRequest' }
+      responses:
+        '201':
+          description: 考试已创建
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ExamResponse' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /exams/{exam_id}/scope-confirmations:
+    post:
+      tags: [scopes]
+      operationId: confirmScope
+      summary: 将非空草稿确认成不可变的考试范围版本
+      parameters:
+        - $ref: '#/components/parameters/ExamId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ScopeConfirmRequest' }
+      responses:
+        '201':
+          description: 已确认
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ScopeVersionResponse' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/PlanInvalid' }
+  /exams/{exam_id}/scope:
+    get:
+      tags: [scopes]
+      operationId: getConfirmedScope
+      summary: 读取最新已确认范围；没有确认版时返回 404
+      parameters:
+        - $ref: '#/components/parameters/ExamId'
+      responses:
+        '200':
+          description: 已确认的不可变范围
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ScopeVersionResponse' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /study-preferences:
+    get:
+      tags: [availability]
+      operationId: getStudyPreferences
+      summary: 读取全局默认每日可学习分钟
+      responses:
+        '200':
+          description: 当前设置
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/StudyPreferencesResponse' }
+    put:
+      tags: [availability]
+      operationId: updateStudyPreferences
+      summary: 修改全局默认分钟；返回全部受影响任务数量
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/StudyPreferencesWriteRequest' }
+      responses:
+        '200':
+          description: 设置已保存；已有计划的变化须另行预览确认
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/StudyPreferencesResponse' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /availability:
+    get:
+      tags: [availability]
+      operationId: listAvailability
+      summary: 读取全局日期可用分钟覆盖值
+      responses:
+        '200':
+          description: 未单独设置的日期使用全局默认分钟
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AvailabilityListResponse' }
+  /availability/{date}:
+    put:
+      tags: [availability]
+      operationId: setAvailability
+      summary: 设置某天全局可学习分钟，0 表示全天不可学习
+      parameters:
+        - $ref: '#/components/parameters/Date'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AvailabilityWriteRequest' }
+      responses:
+        '200':
+          description: 全局日期设置已保存；旧正式计划保留，受影响任务等待补排确认
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AvailabilityResponse' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /plan-previews:
+    post:
+      tags: [plans]
+      operationId: createPlanPreview
+      summary: 为一场或多场考试生成计划预览，不改正式计划
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PlanPreviewRequest' }
+      responses:
+        '202':
+          description: 已创建后台任务；轮询 GET /jobs/{job_id}
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/JobAcceptedResponse' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/PlanInvalid' }
+  /jobs/{job_id}:
+    get:
+      tags: [jobs]
+      operationId: getJob
+      summary: 查询异步任务及生成的预览
+      parameters:
+        - $ref: '#/components/parameters/JobId'
+      responses:
+        '200':
+          description: 状态和结果；result 为 null 表示尚未完成
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/JobResponse' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /plan-applications:
+    post:
+      tags: [plans]
+      operationId: applyPlanPreview
+      summary: 用户确认后原子应用所有受影响考试的新计划版本
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PlanApplicationRequest' }
+      responses:
+        '201':
+          description: 已应用，返回每场考试的新版本
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PlanApplicationResponse' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/PlanInvalid' }
+  /exams/{exam_id}/plan:
+    get:
+      tags: [plans]
+      operationId: getCurrentPlan
+      summary: 读取该考试当前正式计划及待补排提示
+      parameters:
+        - $ref: '#/components/parameters/ExamId'
+      responses:
+        '200':
+          description: 当前正式计划
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CurrentPlanResponse' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /plan-undo:
+    post:
+      tags: [plans]
+      operationId: undoPlanChangeBatch
+      summary: 撤销最近一次跨考试计划调整批次
+      description: 撤销也是一次新版本提交，不删除历史；若之后已有其他计划修改则返回版本冲突
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PlanUndoRequest' }
+      responses:
+        '201':
+          description: 已恢复调整前安排，并产生新的计划版本
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PlanApplicationResponse' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/PlanInvalid' }
+  /plan-tasks/{task_id}:
+    patch:
+      tags: [plans]
+      operationId: editPlanTask
+      summary: 用户手动调整未完成任务的日期、时长或锁定状态
+      description: 请求只带修改字段；服务端保留原值并产生新计划版本，跨课程检查该日期容量
+      parameters:
+        - $ref: '#/components/parameters/TaskId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PlanTaskEditRequest' }
+      responses:
+        '200':
+          description: 修改后的任务和计划版本
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PlanTaskWriteResponse' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/PlanInvalid' }
+  /plan-tasks/{task_id}/complete:
+    post:
+      tags: [plans]
+      operationId: completePlanTask
+      summary: 用户确认完成一项任务
+      parameters:
+        - $ref: '#/components/parameters/TaskId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PlanTaskCompleteRequest' }
+      responses:
+        '200':
+          description: 已完成任务及新计划版本；重复请求返回首次结果
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PlanTaskWriteResponse' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
 
 components:
   parameters:
     IdempotencyKey:
       name: Idempotency-Key
       in: header
-      required: false
+      required: true
       description: 客户端生成的唯一键，防止连点产生重复记录。建议 UUID。
       schema:
         type: string
       example: 9f1c2b7e-3a4d-4c8e-9b2a-1d5e6f7a8b9c
+    CourseId:
+      name: course_id
+      in: path
+      required: true
+      schema: { type: string }
+    PointId:
+      name: point_id
+      in: path
+      required: true
+      schema: { type: string }
+    ExamId:
+      name: exam_id
+      in: path
+      required: true
+      schema: { type: string }
+    Date:
+      name: date
+      in: path
+      required: true
+      schema: { type: string, format: date }
+    JobId:
+      name: job_id
+      in: path
+      required: true
+      schema: { type: string }
+    TaskId:
+      name: task_id
+      in: path
+      required: true
+      schema: { type: string }
 
   responses:
     ValidationError:
@@ -182,7 +570,7 @@ components:
             $ref: '#/components/schemas/Error'
           example:
             error:
-              code: VALIDATION_ERROR
+              code: NOT_FOUND
               message: 课程名不能为空
               details:
                 field: name
@@ -214,6 +602,11 @@ components:
                 current_version: 3
                 your_version: 2
               request_id: req_02
+    PlanInvalid:
+      description: 业务约束未满足，输入和旧正式计划均保留
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
 
   schemas:
     CourseCreateRequest:
@@ -248,6 +641,94 @@ components:
           type: [string, 'null']
           format: date-time
           description: 归档时间；归档不等于删除，历史引用仍然有效
+    CourseListResponse:
+      type: object
+      required: [data, meta]
+      properties:
+        data:
+          type: array
+          items: { $ref: '#/components/schemas/Course' }
+        meta: { $ref: '#/components/schemas/Meta' }
+    PointCreateRequest:
+      type: object
+      required: [name]
+      additionalProperties: false
+      properties:
+        name: { type: string, minLength: 1, maxLength: 160 }
+        parent_id: { type: [string, 'null'] }
+    Point:
+      type: object
+      required: [id, course_id, name, self_status, version]
+      properties:
+        id: { type: string }
+        course_id: { type: string }
+        parent_id: { type: [string, 'null'] }
+        name: { type: string }
+        self_status: { $ref: '#/components/schemas/MasteryStatus' }
+        ai_status:
+          oneOf:
+            - { $ref: '#/components/schemas/MasteryStatus' }
+            - { type: 'null' }
+        version: { type: integer, minimum: 1 }
+    MasteryStatus:
+      type: string
+      enum: [not_started, not_mastered, basic, mastered]
+      description: 用户确认的四态；AI 建议另存，不能覆盖自评
+    PointResponse:
+      type: object
+      required: [data, meta]
+      properties:
+        data: { $ref: '#/components/schemas/Point' }
+        meta: { $ref: '#/components/schemas/Meta' }
+    PointListResponse:
+      type: object
+      required: [data, meta]
+      properties:
+        data:
+          type: object
+          required: [course_id, points]
+          properties:
+            course_id: { type: string }
+            points:
+              type: array
+              items: { $ref: '#/components/schemas/Point' }
+        meta: { $ref: '#/components/schemas/Meta' }
+    SelfStatusWriteRequest:
+      type: object
+      required: [self_status, expected_version]
+      additionalProperties: false
+      properties:
+        self_status: { $ref: '#/components/schemas/MasteryStatus' }
+        expected_version: { type: integer, minimum: 1 }
+    ExamCreateRequest:
+      type: object
+      required: [name, exam_date]
+      additionalProperties: false
+      properties:
+        name: { type: string, minLength: 1, maxLength: 100 }
+        exam_date: { type: string, format: date }
+    Exam:
+      type: object
+      required: [id, course_id, name, exam_date]
+      properties:
+        id: { type: string }
+        course_id: { type: string }
+        name: { type: string }
+        exam_date: { type: string, format: date }
+    ExamResponse:
+      type: object
+      required: [data, meta]
+      properties:
+        data: { $ref: '#/components/schemas/Exam' }
+        meta: { $ref: '#/components/schemas/Meta' }
+    ExamListResponse:
+      type: object
+      required: [data, meta]
+      properties:
+        data:
+          type: array
+          items: { $ref: '#/components/schemas/Exam' }
+        meta: { $ref: '#/components/schemas/Meta' }
 
     ScopeDraftWriteRequest:
       type: object
@@ -276,12 +757,12 @@ components:
           description: 是否纳入本次考试范围
         priority:
           type: string
-          enum: [normal, key]
+          enum: [normal, important]
           default: normal
 
     ScopeDraft:
       type: object
-      required: [exam_id, draft_version, updated_at]
+      required: [exam_id, draft_version, items, updated_at]
       properties:
         exam_id:
           type: string
@@ -290,11 +771,257 @@ components:
           description: 每次成功保存加 1，用于下次 expected_version
         included_count:
           type: integer
-        key_count:
+        important_count:
           type: integer
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/ScopeItemWrite' }
         updated_at:
           type: string
           format: date-time
+    ScopeDraftResponse:
+      type: object
+      required: [data, meta]
+      properties:
+        data: { $ref: '#/components/schemas/ScopeDraft' }
+        meta: { $ref: '#/components/schemas/Meta' }
+    ScopeConfirmRequest:
+      type: object
+      required: [expected_draft_version]
+      additionalProperties: false
+      properties:
+        expected_draft_version: { type: integer, minimum: 1 }
+    ScopeVersion:
+      type: object
+      required: [exam_id, scope_version, items, confirmed_at]
+      properties:
+        exam_id: { type: string }
+        scope_version: { type: integer, minimum: 1 }
+        items:
+          type: array
+          minItems: 1
+          items: { $ref: '#/components/schemas/ScopeItemWrite' }
+        confirmed_at: { type: string, format: date-time }
+    ScopeVersionResponse:
+      type: object
+      required: [data, meta]
+      properties:
+        data: { $ref: '#/components/schemas/ScopeVersion' }
+        meta: { $ref: '#/components/schemas/Meta' }
+    StudyPreferencesWriteRequest:
+      type: object
+      required: [default_daily_minutes, expected_version]
+      additionalProperties: false
+      properties:
+        default_daily_minutes: { type: integer, minimum: 0, maximum: 1440 }
+        expected_version: { type: integer, minimum: 0 }
+    StudyPreferencesResponse:
+      type: object
+      required: [data, meta]
+      properties:
+        data:
+          type: object
+          required: [default_daily_minutes, version, affected_exam_ids, affected_task_count]
+          properties:
+            default_daily_minutes: { type: integer, minimum: 0 }
+            version: { type: integer, minimum: 1, description: 全局日程版本；修改默认分钟或具体日期都会递增 }
+            affected_exam_ids:
+              type: array
+              items: { type: string }
+            affected_task_count: { type: integer, minimum: 0 }
+        meta: { $ref: '#/components/schemas/VersionedMeta' }
+    AvailabilityWriteRequest:
+      type: object
+      required: [available_minutes, expected_version]
+      additionalProperties: false
+      properties:
+        available_minutes: { type: integer, minimum: 0, maximum: 1440 }
+        expected_version: { type: integer, minimum: 0 }
+    AvailabilityDay:
+      type: object
+      required: [date, available_minutes, version]
+      properties:
+        date: { type: string, format: date }
+        available_minutes: { type: integer, minimum: 0 }
+        version: { type: integer, minimum: 1 }
+    AvailabilityResponse:
+      type: object
+      required: [data, meta]
+      properties:
+        data:
+          type: object
+          required: [day, affected_exam_ids, affected_task_count]
+          properties:
+            day: { $ref: '#/components/schemas/AvailabilityDay' }
+            affected_exam_ids:
+              type: array
+              items: { type: string }
+            affected_task_count: { type: integer, minimum: 0 }
+        meta: { $ref: '#/components/schemas/VersionedMeta' }
+    AvailabilityListResponse:
+      type: object
+      required: [data, meta]
+      properties:
+        data:
+          type: array
+          items: { $ref: '#/components/schemas/AvailabilityDay' }
+        meta: { $ref: '#/components/schemas/VersionedMeta' }
+    PlanPreviewRequest:
+      type: object
+      required: [exam_ids, scope_versions, base_plan_versions, availability_version, strategy]
+      additionalProperties: false
+      properties:
+        exam_ids:
+          type: array
+          minItems: 1
+          uniqueItems: true
+          items: { type: string }
+        scope_versions:
+          type: object
+          additionalProperties: { type: integer, minimum: 1 }
+        base_plan_versions:
+          type: object
+          additionalProperties: { type: integer, minimum: 0 }
+        availability_version: { type: integer, minimum: 0 }
+        strategy: { type: string, enum: [balanced, priority_first, preserve_original] }
+      description: 两个版本映射必须恰好覆盖 exam_ids；后端按全局日期汇总所有课程任务
+    JobAcceptedResponse:
+      type: object
+      required: [data, meta]
+      properties:
+        data:
+          type: object
+          required: [job_id, status]
+          properties:
+            job_id: { type: string }
+            status: { type: string, enum: [queued] }
+        meta: { $ref: '#/components/schemas/Meta' }
+    JobResponse:
+      type: object
+      required: [data, meta]
+      properties:
+        data:
+          type: object
+          required: [job_id, status]
+          properties:
+            job_id: { type: string }
+            status: { type: string, enum: [queued, running, needs_review, done, failed, cancelled] }
+            result:
+              oneOf:
+                - { $ref: '#/components/schemas/PlanPreview' }
+                - { type: 'null' }
+            error_code: { type: [string, 'null'] }
+        meta: { $ref: '#/components/schemas/Meta' }
+    PlanPreview:
+      type: object
+      required: [preview_id, affected_exam_ids, moved_tasks, unscheduled_tasks, feasible_before_exam]
+      properties:
+        preview_id: { type: string }
+        affected_exam_ids:
+          type: array
+          items: { type: string }
+        moved_tasks:
+          type: array
+          items: { type: object, additionalProperties: true }
+        unscheduled_tasks:
+          type: array
+          items: { type: object, additionalProperties: true }
+        feasible_before_exam: { type: boolean }
+        reasons:
+          type: array
+          items: { type: string }
+      description: 后端还须校验全局每日任务分钟总和；不够时间时列明未排任务
+    PlanApplicationRequest:
+      type: object
+      required: [preview_id, expected_versions, availability_version]
+      additionalProperties: false
+      properties:
+        preview_id: { type: string }
+        expected_versions:
+          type: object
+          additionalProperties: { type: integer, minimum: 0 }
+        availability_version: { type: integer, minimum: 0 }
+    PlanApplicationResponse:
+      type: object
+      required: [data, meta]
+      properties:
+        data:
+          type: object
+          required: [change_batch_id, plan_versions, moved_count, unscheduled_count]
+          properties:
+            change_batch_id: { type: string, description: 撤销时使用的调整批次 ID }
+            plan_versions:
+              type: object
+              additionalProperties: { type: integer, minimum: 1 }
+            moved_count: { type: integer, minimum: 0 }
+            unscheduled_count: { type: integer, minimum: 0 }
+        meta: { $ref: '#/components/schemas/Meta' }
+    PlanUndoRequest:
+      type: object
+      required: [change_batch_id, expected_versions, availability_version]
+      additionalProperties: false
+      properties:
+        change_batch_id: { type: string }
+        expected_versions:
+          type: object
+          additionalProperties: { type: integer, minimum: 1 }
+        availability_version: { type: integer, minimum: 0 }
+      description: expected_versions 必须恰好覆盖该批次的全部考试；重验全局容量、已完成任务及锁定任务
+    PlanTaskEditRequest:
+      type: object
+      required: [expected_plan_version, availability_version]
+      minProperties: 3
+      additionalProperties: false
+      properties:
+        expected_plan_version: { type: integer, minimum: 1 }
+        availability_version: { type: integer, minimum: 0 }
+        date: { type: string, format: date }
+        minutes: { type: integer, minimum: 1, maximum: 1440 }
+        locked: { type: boolean }
+      description: date、minutes、locked 至少传一个；已完成任务不可编辑
+    PlanTaskCompleteRequest:
+      type: object
+      required: [expected_plan_version]
+      additionalProperties: false
+      properties:
+        expected_plan_version: { type: integer, minimum: 1 }
+    PlanTaskWriteResponse:
+      type: object
+      required: [data, meta]
+      properties:
+        data:
+          type: object
+          required: [exam_id, plan_version, task]
+          properties:
+            exam_id: { type: string }
+            plan_version: { type: integer, minimum: 1 }
+            task: { $ref: '#/components/schemas/PlanTask' }
+        meta: { $ref: '#/components/schemas/Meta' }
+    PlanTask:
+      type: object
+      required: [id, point_id, date, minutes, status, locked]
+      properties:
+        id: { type: string }
+        point_id: { type: string }
+        date: { type: [string, 'null'], format: date, description: 待重新安排时为 null }
+        minutes: { type: integer, minimum: 1 }
+        status: { type: string, enum: [todo, in_progress, done, unscheduled, cancelled] }
+        locked: { type: boolean }
+    CurrentPlanResponse:
+      type: object
+      required: [data, meta]
+      properties:
+        data:
+          type: object
+          required: [exam_id, plan_version, tasks]
+          properties:
+            exam_id: { type: string }
+            plan_version: { type: integer, minimum: 1 }
+            needs_replan: { type: boolean }
+            tasks:
+              type: array
+              items: { $ref: '#/components/schemas/PlanTask' }
+        meta: { $ref: '#/components/schemas/Meta' }
 
     Meta:
       type: object
@@ -306,6 +1033,13 @@ components:
         version:
           type: integer
           description: 资源当前版本，便于前端决定下次传什么 expected_version
+    VersionedMeta:
+      allOf:
+        - { $ref: '#/components/schemas/Meta' }
+        - type: object
+          required: [version]
+          properties:
+            version: { type: integer, minimum: 1, description: 全局日程版本，供计划预览和应用时校验 }
 
     Error:
       type: object
@@ -319,6 +1053,8 @@ components:
               type: string
               enum:
                 - VALIDATION_ERROR
+                - NOT_FOUND
+                - DUPLICATE_COURSE
                 - VERSION_CONFLICT
                 - SOURCE_UNAVAILABLE
                 - OCR_LOW_CONFIDENCE
@@ -336,13 +1072,3 @@ components:
               description: 结构化补充信息，供前端做针对性处理
             request_id:
               type: string
-
-x-next-batch:
-  description: B1 映射里还有两个接口本轮没写，下一轮补上，互审时要明确说出来
-  endpoints:
-    - method: GET
-      path: /courses/{courseId}/points
-      purpose: 考试范围页加载章节树与自评
-    - method: POST
-      path: /exams/{examId}/plan-previews
-      purpose: 生成计划预览，返回 202 与 job_id，不写正式计划

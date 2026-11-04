@@ -1,9 +1,9 @@
 # 页面与接口对照（B1）
 
-版本 0.2　日期 2026-11-01　状态：待伙伴互审
+版本 0.3　更新：2026-11-04　状态：待伙伴互审
 
 > **B1 的验收标准**：每个页面操作都能找到对应接口。
-> 本文件末尾有「覆盖检查表」逐条对照，还有一节列出**串不起来的两个断点**——那才是 B1 真正的产出。
+> 本文件按完整的 T01 用户流程对照接口；原先发现的“缺创建考试、缺确认范围”两个断点已补进契约。
 > 错误格式（B3）和预览分离检查（B4）已拆到 `error-format.md`，本文件只讲 B1。
 
 ---
@@ -13,11 +13,19 @@
 | 页面 | 用户做什么 | 接口 | 后端回什么 |
 | --- | --- | --- | --- |
 | 创建课程抽屉 | 填名字，点创建 | `POST /courses` | 新课程的 `id` |
-| 考试范围页 | 打开页面 | `GET /courses/{courseId}/points` | 知识点树 + 自评状态 |
-| 考试范围页 | 勾选考点，自动保存 | `PUT /exams/{examId}/scope-draft` | 新的草稿版本号 |
-| 用户规划页 | 点「生成计划」 | `POST /exams/{examId}/plan-previews` | `202` + `job_id`（不是计划） |
+| 考试范围页 | 打开页面 | `GET /courses/{course_id}/points` | 知识点树 + 自评状态 |
+| 考试范围页 | 创建考试 | `POST /courses/{course_id}/exams` | 新考试的 `id` |
+| 考试范围页 | 勾选考点，自动保存 | `PUT /exams/{exam_id}/scope-draft` | 新的草稿版本号 |
+| 考试范围页 | 确认考点 | `POST /exams/{exam_id}/scope-confirmations` | 不可变的 `scope_version` |
+| 日程设置 | 修改某日可用分钟 | `PUT /availability/{date}` | 全局日期设置及受影响任务 |
+| 用户规划页 | 点「生成计划」 | `POST /plan-previews` | `202` + `job_id`（不是计划） |
+| 用户规划页 | 等待预览完成 | `GET /jobs/{job_id}` | 预览和受影响课程 |
+| 用户规划页 | 确认预览 | `POST /plan-applications` | 调整批次 ID 与各考试的新计划版本 |
+| 用户规划页 | 撤销最近一次补排 | `POST /plan-undo` | 恢复安排后的新计划版本 |
+| 今日复习／任务卡 | 手动改日期、时长、锁定 | `PATCH /plan-tasks/{task_id}` | 更新后的任务与计划版本 |
+| 今日复习／任务卡 | 确认完成 | `POST /plan-tasks/{task_id}/complete` | 已完成任务与计划版本 |
 
-一个页面可以对应多个接口。**「考试范围页」就有两个**：进来时读一次（GET），勾选后写一次（PUT）。这是最常见的误解——以为一个页面对一个接口。
+一个页面可以对应多个接口。例如「考试范围页」需要先读取课程知识点和范围草稿，保存草稿后再确认正式范围。
 
 ---
 
@@ -40,7 +48,7 @@
 
 // 回过来
 {
-  "data": { "id": "crs_01", "name": "高等数学", "description": "2026 秋季学期",
+  "data": { "id": "course_1", "name": "高等数学", "description": "2026 秋季学期",
             "created_at": "2026-11-01T08:00:00Z", "archived_at": null },
   "meta": { "request_id": "req_01" }
 }
@@ -55,8 +63,8 @@
 | 项 | 内容 |
 | --- | --- |
 | 谁在什么时候调 | 用户打开「考试范围」页时，页面加载那一刻 |
-| 接口 | `GET /api/v1/courses/{courseId}/points` |
-| 请求带什么 | 路径里的 `courseId`；不用带请求体 |
+| 接口 | `GET /api/v1/courses/{course_id}/points` |
+| 请求带什么 | 路径里的 `course_id`；不用带请求体 |
 | 成功回什么 | 知识点树，每个点带 `self_status`（自评）和 `ai_status`（AI 建议） |
 | 会怎么失败 | `404` 课程不存在；`200` + 空数组表示还没建知识点（这是正常状态，不是错误） |
 | 前端拿到后干什么 | 画章节树，画每个点后面的四态选择器 |
@@ -64,15 +72,15 @@
 ```json
 {
   "data": {
-    "course_id": "crs_01",
+    "course_id": "course_1",
     "points": [
-      { "id": "kp_01", "parent_id": null, "title": "第一章 极限",
-        "sort_order": 1, "self_status": "heard", "ai_status": "not_started" },
-      { "id": "kp_02", "parent_id": "kp_01", "title": "洛必达法则",
-        "sort_order": 2, "self_status": "practiced", "ai_status": "heard" }
+      { "id": "point_1", "course_id": "course_1", "parent_id": null, "name": "函数的极限",
+        "self_status": "not_started", "ai_status": null, "version": 1 },
+      { "id": "point_2", "course_id": "course_1", "parent_id": null, "name": "函数的导数",
+        "self_status": "basic", "ai_status": null, "version": 1 }
     ]
   },
-  "meta": { "version": 1 }
+  "meta": { "request_id": "req_02", "version": 1 }
 }
 ```
 
@@ -88,10 +96,10 @@
 | 项 | 内容 |
 | --- | --- |
 | 谁在什么时候调 | 用户勾选/取消考点之后（可以防抖后自动存，也可以点「保存」） |
-| 接口 | `PUT /api/v1/exams/{examId}/scope-draft` |
+| 接口 | `PUT /api/v1/exams/{exam_id}/scope-draft` |
 | 请求带什么 | `items[]`（每个点的 `point_id`、`included`、`priority`）、`expected_version` |
 | 成功回什么 | 新的 `draft_version`，以及纳入几个、几个是重点 |
-| 会怎么失败 | `404` 考试不存在；`409` 别人先改过；`422` 知识点不属于这门课 |
+| 会怎么失败 | `404` 考试不存在；`409` 版本过期；`400` 知识点不属于这门课 |
 | 前端拿到后干什么 | 更新本地的版本号，下次保存带上它 |
 
 ```json
@@ -99,16 +107,16 @@
 {
   "expected_version": 0,
   "items": [
-    { "point_id": "kp_01", "included": true,  "priority": "key" },
-    { "point_id": "kp_02", "included": true,  "priority": "normal" },
-    { "point_id": "kp_03", "included": false, "priority": "normal" }
+    { "point_id": "point_1", "included": true,  "priority": "normal" },
+    { "point_id": "point_2", "included": true,  "priority": "important" },
+    { "point_id": "point_3", "included": false, "priority": "normal" }
   ]
 }
 ```
 
 **三个关键设计**：
 
-1. **整份覆盖，不是打补丁**。每次提交的是「完整勾选清单」，后端整份替换。不是发「把 kp_03 改成不考」，而是发当前的全貌。这样不会因为顺序错乱算错。
+1. **整份覆盖，不是打补丁**。每次提交的是「完整勾选清单」，后端整份替换。不是发「把 point_3 改成不考」，而是发当前的全貌。这样不会因为顺序错乱算错。
 2. **`expected_version` 是防撞车用的**。用户打开页面时后端是第 0 版；如果他勾了半天，期间别人在另一台电脑改过（变成第 3 版），他提交时带 0 就会收到 `409`，前端弹窗让他看差异。**不能默默覆盖。**
 3. **草稿不是正式范围**。草稿可以反复改、可以为空。真正的「确认」是另一个接口，会产生不可变的 `scope_version`。
 
@@ -119,81 +127,52 @@
 | 项 | 内容 |
 | --- | --- |
 | 谁在什么时候调 | 用户在「用户规划」页点「生成计划」时 |
-| 接口 | `POST /api/v1/exams/{examId}/plan-previews` |
-| 请求带什么 | 范围版本、当前计划版本、策略、不可学的日期、某天临时改的时长 |
+| 接口 | `POST /api/v1/plan-previews` |
+| 请求带什么 | 受影响考试 ID、各考试范围和计划版本、全局日程版本、补排策略 |
 | 成功回什么 | **`202` + `job_id`**，不是排好的计划 |
-| 会怎么失败 | `409` 范围版本已过期；`422` 时间根本不够（`PLAN_INFEASIBLE`） |
-| 前端拿到后干什么 | **轮询 `GET /jobs/{jobId}`**，直到状态变成 `needs_review` 或 `done`，再取预览结果 |
+| 会怎么失败 | `409` 范围或日程版本已过期；`422` 输入约束互相矛盾。单纯时间不够仍返回预览，并列出未排入任务 |
+| 前端拿到后干什么 | **轮询 `GET /jobs/{job_id}`**，直到状态变成 `done` 再取预览结果；`failed` 显示原因 |
 
 ```json
 // 第一步：提交
-{ "scope_version": 2, "base_plan_version": 3, "strategy": "even",
-  "unavailable_dates": ["2026-11-02"], "daily_minutes_override": { "2026-11-03": 30 } }
+{ "exam_ids": ["exam_1"], "scope_versions": {"exam_1": 1},
+  "base_plan_versions": {"exam_1": 0}, "availability_version": 1,
+  "strategy": "balanced" }
 
 // 立刻回来
-{ "data": { "job_id": "job_01" }, "meta": { "request_id": "req_03" } }
+{ "data": { "job_id": "job_01", "status": "queued" }, "meta": { "request_id": "req_03" } }
 
 // 第二步：轮询 GET /jobs/job_01，跑完后
-{ "data": { "status": "done",
-            "result": { "preview_id": "prev_01", "feasible_before_exam": true,
+{ "data": { "job_id": "job_01", "status": "done",
+            "result": { "preview_id": "prev_01", "affected_exam_ids": ["exam_1"], "feasible_before_exam": true,
                         "moved_tasks": [ { "task_id": "tsk_05", "from": "2026-11-02", "to": "2026-11-04", "minutes": 45 } ],
-                        "unchanged_task_ids": ["tsk_01", "tsk_02"],
-                        "unscheduled_tasks": [] } } }
+                        "unscheduled_tasks": [] } }, "meta": { "request_id": "req_04" } }
 ```
 
-**这是四个操作里唯一异步的**，因为排一份计划要几秒钟到几十秒。前端不能干等，必须轮询。所以这个「操作」实际是两次请求：先提交，再查任务。
+**这个操作是异步的**，因为排一份计划要几秒钟到几十秒。前端不能干等，必须轮询。所以这个「操作」实际是两次请求：先提交，再查任务。
 
 ---
 
-## 三、覆盖检查表（B1 的验收）
+## 三、完整链路与覆盖检查
 
-| # | 页面 | 用户动作 | 对应接口 | 契约里写了吗 | 状态 |
-| --- | --- | --- | --- | --- | --- |
-| 1 | 创建课程抽屉 | 填名字点创建 | `POST /courses` | ✅ 已写 | 通过 |
-| 2 | 考试范围页 | 打开页面加载 | `GET /courses/{id}/points` | ❌ 下一轮 | 映射已完成，契约待补 |
-| 3 | 考试范围页 | 勾选后保存 | `PUT /exams/{id}/scope-draft` | ✅ 已写 | 通过 |
-| 4 | 用户规划页 | 点生成计划 | `POST /exams/{id}/plan-previews` | ❌ 下一轮 | 映射已完成，契约待补 |
+| 顺序 | 用户动作 | 接口 | 契约状态 |
+| --- | --- | --- | --- |
+| 1 | 建课，或重新打开课程列表 | `POST/GET /courses` | 已写 |
+| 2 | 手工建知识点、查看知识点、自评 | `POST/GET /courses/{course_id}/points`、`PUT /points/{point_id}/self-status` | 已写 |
+| 3 | 创建考试、读取考试列表 | `POST/GET /courses/{course_id}/exams` | 已写 |
+| 4 | 读取／保存范围草稿，确认／读取正式范围 | `GET/PUT /exams/{exam_id}/scope-draft`、`POST /exams/{exam_id}/scope-confirmations`、`GET /exams/{exam_id}/scope` | 已写 |
+| 5 | 设置全局每日时间或某天不可学 | `GET/PUT /study-preferences`、`GET /availability`、`PUT /availability/{date}` | 已写 |
+| 6 | 生成计划预览、查询处理进度 | `POST /plan-previews`、`GET /jobs/{job_id}` | 已写 |
+| 7 | 确认应用并查看正式计划 | `POST /plan-applications`、`GET /exams/{exam_id}/plan` | 已写 |
+| 8 | 撤销最近一次调整 | `POST /plan-undo` | 已写 |
+| 9 | 手动调整、确认完成任务 | `PATCH /plan-tasks/{task_id}`、`POST /plan-tasks/{task_id}/complete` | 已写 |
 
-**四项都有接口可指，B1 验收通过。** 但「映射完成」不等于「契约写完」——第 2、4 项还要落到 `api-contract.yaml` 里，属于 B2 的下一轮。
+原先的两个断点“创建考试”和“确认范围”已经补上。预览有 `preview_id`，但不会写正式计划；应用时重新检查所有课程在同一天的总分钟数。
 
----
+## 四、需要伙伴互审的规则
 
-## 四、B1 查出来的两个断点（这才是重点）
-
-把四个操作按用户真实顺序串起来，会发现中间**断了两处**：
-
-```
-创建课程 → ？？？ → 保存范围草稿 → ？？？ → 生成计划预览
-   ✅          缺 1         ✅         缺 2         ✅
-```
-
-### 断点 1：没有「创建考试」的接口
-
-操作 3 和操作 4 的地址里都有 `{examId}`。这个考试是哪来的？用户在建完课程后，必须先建一场考试（填日期、每天学多久），才能勾范围、才能排计划。
-
-对应设计文档 **API-05 `POST /courses/{id}/exams`**，B1 给的四个操作里没包含它。
-
-**影响**：如果前端只按这四个接口做，走到「保存范围草稿」时会发现手里没有 `examId`，卡住。
-
-### 断点 2：没有「确认范围」的接口
-
-操作 3 存的是**草稿**，但操作 4 生成计划时需要一个**已确认的 `scope_version`**（请求里那个 `"scope_version": 2`）。草稿不能直接拿去排计划——因为用户可能还在改。
-
-对应设计文档 **API-06 `POST /exams/{id}/scope-confirmations`**，同样不在 B1 的四个操作里。
-
-**影响**：草稿永远变不成正式范围，计划永远生成不了。
-
-### 建议怎么处理
-
-这两个不是谁写漏了，是 **B1 只挑了四个动作**，而真实链路有六个。互审时要明确说：
-
-> B1 的四个操作本身都对得上接口，但串成完整链路还缺「建考试」和「确认范围」两个接口，建议列入下一轮。
-
----
-
-## 五、交接给伙伴的话
-
-1. 一个页面对应多个接口——「考试范围页」有 GET（读）和 PUT（写）两条，别按「一页一接口」设计
-2. 操作 4 是异步的，前端要会轮询 `GET /jobs/{id}`，后端不能让请求挂住等结果
-3. 操作 2 返回的两个状态字段必须分开：`self_status`（用户填）和 `ai_status`（系统猜）
-4. 空数据（没知识点）走 `200 + 空数组`，不要当 404 处理
+1. 示例数据里的四态统一为 `not_started / not_mastered / basic / mastered`，重点统一为 `normal / important`。自评和 AI 建议始终是两个字段。
+2. `availability` 以全局日期为键。某天改成 0 分钟，要列出所有受影响课程；已完成任务不移动。
+3. 新考试第一次生成计划时还没有 `plan_id`，所以计划预览与应用通过考试 ID 集合和 `preview_id` 衔接。
+4. `POST /plan-previews` 返回 `202 + job_id`；前端轮询 `GET /jobs/{job_id}`。用户确认之前不写正式计划。
+5. 当前契约覆盖 T01 的建课到计划执行。资料导入、在线答题、批改报告等接口将在对应开发任务中继续细化。
