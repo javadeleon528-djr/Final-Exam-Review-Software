@@ -1,0 +1,64 @@
+{
+  "course": {
+    "id": "course_1",
+    "name": "高等数学"
+  },
+  "knowledge_points": [
+    {
+      "id": "point_1",
+      "course_id": "course_1",
+      "name": "函数的极限"
+    },
+	{
+	  "id":"point_2",
+	  "course_id":"course_1",
+	  "name":"函数的导数"
+	},
+	{
+	  "id":"point_3",
+	  "course_id":"course_1",
+	  "name":"函数的微分"
+	}	
+  ],
+  "exam": {
+    "id": "exam_1",
+    "course_id": "course_1",
+    "name": "高数期末考试",
+	"exam_date":"2027-01-08"
+  },
+  "exam_scope":[
+  {
+  "exam_id":"exam_1",
+  "point_id":"point_1",
+  "priority":"normal"
+  },
+  {
+  "exam_id":"exam_1",
+  "point_id":"point_2",
+  "priority":"important"
+  }
+  ],
+  "user_profiles":[
+  {
+  "point_id":"point_1",
+  "self_status":"not_started"
+  },
+  {
+  "point_id":"point_2",
+  "self_status":"basic"
+  },
+  {
+  "point_id":"point_3",
+  "self_status":"mastered"
+  }
+  ],
+  "unavailable_days":["2026-11-05"],
+  "plan_tasks":[
+  {
+  "exam_id":"exam_1",
+  "point_id":"point_2",
+  "date":"2026-11-11",
+  "minutes":120
+  }
+  ]
+}
