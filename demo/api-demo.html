@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>接口演示 — 创建课程</title>
+<style>
+  :root{
+    --bg:#f4f6f8; --card:#fff; --line:#e3e7ec; --ink:#1f2328; --muted:#6b7280;
+    --blue:#2563eb; --blue-bg:#eff6ff; --green:#16803c; --green-bg:#eaf7ee;
+    --red:#c0392b; --red-bg:#fdecea; --amber:#a16207; --amber-bg:#fef7e6;
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0; padding:28px 20px 60px; background:var(--bg); color:var(--ink);
+    font:15px/1.65 -apple-system,"Segoe UI","Microsoft YaHei",system-ui,sans-serif;
+  }
+  .wrap{max-width:1080px;margin:0 auto}
+  h1{font-size:20px;font-weight:600;margin:0 0 6px}
+  .lead{color:var(--muted);margin:0 0 24px;font-size:14px}
+  .cols{display:grid;grid-template-columns:1fr 1.15fr;gap:18px}
+  @media(max-width:860px){.cols{grid-template-columns:1fr}}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:18px 20px}
+  .card h2{font-size:14px;font-weight:600;margin:0 0 4px}
+  .card .sub{font-size:12px;color:var(--muted);margin:0 0 16px}
+  label{display:block;font-size:13px;margin:0 0 5px;color:#374151}
+  input{
+    width:100%;padding:9px 11px;border:1px solid var(--line);border-radius:7px;
+    font:inherit;font-size:14px;background:#fff;margin:0 0 14px;
+  }
+  input:focus{outline:2px solid #bfdbfe;border-color:#93c5fd}
+  button{
+    font:inherit;font-size:14px;padding:9px 16px;border-radius:7px;border:1px solid transparent;
+    cursor:pointer;background:var(--blue);color:#fff;
+  }
+  button:hover{background:#1d4ed8}
+  button.ghost{background:#fff;border-color:var(--line);color:#374151}
+  button.ghost:hover{background:#f9fafb}
+  .row{display:flex;gap:8px;flex-wrap:wrap}
+  .panel{margin:0 0 14px}
+  .panel:last-child{margin-bottom:0}
+  .tag{display:inline-block;font-size:12px;padding:1px 7px;border-radius:4px;margin-left:6px;font-weight:500}
+  pre{
+    margin:0;padding:12px 14px;border-radius:8px;overflow-x:auto;
+    font:12.5px/1.6 ui-monospace,Consolas,"Courier New",monospace;
+    background:#f8fafc;border:1px solid var(--line);white-space:pre;
+  }
+  .bd{font-size:12px;color:var(--muted);margin:0 0 6px}
+  .ok{background:var(--green-bg);border-color:#cfe9d8;color:var(--green)}
+  .bad{background:var(--red-bg);border-color:#f5cfca;color:var(--red)}
+  .warn{background:var(--amber-bg);border-color:#f0e0b8;color:var(--amber)}
+  .list{margin:16px 0 0;padding:0;list-style:none;font-size:14px}
+  .list li{padding:9px 12px;border:1px solid var(--line);border-radius:7px;margin-bottom:7px;background:#fbfcfd;display:flex;justify-content:space-between;gap:10px}
+  .list .id{font:12px ui-monospace,Consolas,monospace;color:var(--muted)}
+  .note{margin:22px 0 0;padding:14px 16px;background:#fff;border:1px solid var(--line);border-left:3px solid var(--blue);border-radius:6px;font-size:14px;color:#374151}
+  .note b{font-weight:600}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>接口演示：点一下「创建课程」，看看电脑之间到底传了什么</h1>
+  <p class="lead">左边是用户看到的界面，右边是前端和后端之间真实流动的数据。中间那层你看不见，但它是整个软件的地基。</p>
+
+  <div class="cols">
+    <div class="card">
+      <h2>① 用户看到的界面</h2>
+      <p class="sub">这就是前端。用户只跟这一层打交道。</p>
+      <label for="name">课程名</label>
+      <input id="name" placeholder="比如：高等数学" autocomplete="off">
+      <label for="desc">说明（可不填）</label>
+      <input id="desc" placeholder="比如：2026 秋季学期" autocomplete="off">
+      <div class="row">
+        <button id="go">创建课程</button>
+        <button class="ghost" id="fillGood">填个正常名字</button>
+        <button class="ghost" id="fillDup">填一个已存在的名字</button>
+      </div>
+      <ul class="list" id="courses"></ul>
+    </div>
+
+    <div class="card">
+      <h2>② 前端和后端之间传的话</h2>
+      <p class="sub">用户看不到这两块，但所有功能都靠它们。</p>
+
+      <div class="panel">
+        <div class="bd">前端发出去的（请求）—— 你每打一个字它都在变</div>
+        <pre id="req"></pre>
+      </div>
+
+      <div class="panel">
+        <div class="bd">后端回过来的（响应）—— 点「创建课程」后才出现<span id="statusTag"></span></div>
+        <pre id="res">（还没点）</pre>
+      </div>
+    </div>
+  </div>
+
+  <div class="note">
+    <b>要理解的就一件事：</b>左边那个输入框，用户填完点一下，前端把它打包成一段文字发给后端；
+    后端处理完，再打包一段文字发回来；前端照着这段文字决定「跳转到下一页」还是「把输入框标红」。
+    <br><br>
+    这就是「接口」。它就是这两段文字的格式约定——不是功能，是说法。所以它能在写代码之前先定下来。
+  </div>
+</div>
+
+<script>
+const nameEl = document.getElementById('name');
+const descEl = document.getElementById('desc');
+const reqEl  = document.getElementById('req');
+const resEl  = document.getElementById('res');
+const tagEl  = document.getElementById('statusTag');
+const listEl = document.getElementById('courses');
+
+const db = [{ id: 'crs_00', name: '线性代数', description: '2026 秋季学期' }];
+let seq = 1;
+
+function renderRequest() {
+  const body = {};
+  body.name = nameEl.value;
+  if (descEl.value) body.description = descEl.value;
+  reqEl.textContent =
+    'POST /api/v1/courses\n' +
+    'Content-Type: application/json\n' +
+    'Idempotency-Key: 9f1c2b7e-...\n\n' +
+    JSON.stringify(body, null, 2);
+}
+
+function renderList() {
+  listEl.innerHTML = db
+    .map(c => `<li><span>${c.name}${c.description ? ' · ' + c.description : ''}</span><span class="id">${c.id}</span></li>`)
+    .join('');
+}
+
+function show(text, cls, tag, tagCls) {
+  resEl.textContent = text;
+  resEl.className = cls || '';
+  tagEl.textContent = tag || '';
+  tagEl.className = 'tag ' + (tagCls || '');
+}
+
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+async function create() {
+  const name = nameEl.value.trim();
+  const desc = descEl.value.trim();
+
+  show('处理中…', '', '', '');
+  await sleep(320);
+
+  if (!name) {
+    show(JSON.stringify({
+      error: {
+        code: 'VALIDATION_ERROR',
+        message: '课程名不能为空',
+        details: { field: 'name' },
+        request_id: 'req_01'
+      }
+    }, null, 2), 'bad', '400 输入不合法', 'bad');
+    nameEl.focus();
+    return;
+  }
+
+  if (db.some(c => c.name === name)) {
+    show(JSON.stringify({
+      error: {
+        code: 'VALIDATION_ERROR',
+        message: '已存在同名课程「' + name + '」',
+        details: { reason: 'duplicate_name', existing_course_id: db.find(c => c.name === name).id },
+        request_id: 'req_02'
+      }
+    }, null, 2), 'warn', '409 名字重复了', 'warn');
+    return;
+  }
+
+  const course = {
+    id: 'crs_0' + seq++,
+    name: name,
+    description: desc || null,
+    created_at: new Date().toISOString().replace(/\.\d+Z$/, 'Z'),
+    archived_at: null
+  };
+  db.push(course);
+  renderList();
+
+  show(JSON.stringify({
+    data: course,
+    meta: { request_id: 'req_0' + seq }
+  }, null, 2), 'ok', '201 创建成功', 'ok');
+}
+
+document.getElementById('go').addEventListener('click', create);
+document.getElementById('fillGood').addEventListener('click', () => {
+  nameEl.value = '高等数学'; descEl.value = '2026 秋季学期'; renderRequest();
+});
+document.getElementById('fillDup').addEventListener('click', () => {
+  nameEl.value = '线性代数'; descEl.value = ''; renderRequest();
+});
+nameEl.addEventListener('input', renderRequest);
+descEl.addEventListener('input', renderRequest);
+nameEl.addEventListener('keydown', e => { if (e.key === 'Enter') create(); });
+
+renderRequest();
+renderList();
+</script>
+</body>
+</html>
