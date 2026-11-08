@@ -34,8 +34,44 @@ tags:
     description: 计划预览、应用、撤销和任务执行
   - name: jobs
     description: 长任务状态
+  - name: system
+    description: 系统与健康检查
 
 paths:
+  /health:
+    get:
+      tags: [system]
+      operationId: getHealth
+      summary: 健康检查：服务与数据库是否可用
+      description: |
+        前端启动时调用，用于显示「连接中／已连接／连接失败／数据库不可用」。
+        只读检查，不创建或修改任何数据。数据库不可用时返回 503，
+        前端据 HTTP 状态与 error.code 判断并展示明确提示。
+      responses:
+        '200':
+          description: 服务与数据库均正常
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/HealthResponse' }
+              example:
+                data:
+                  status: ok
+                  database: ok
+                meta:
+                  request_id: req_01
+        '503':
+          description: 数据库不可用，服务本身仍在运行
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+              example:
+                error:
+                  code: STORAGE_ERROR
+                  message: 数据库暂时无法连接，请稍后重试
+                  details:
+                    database: unavailable
+                  request_id: req_02
+
   /courses:
     get:
       tags: [courses]
@@ -570,7 +606,7 @@ components:
             $ref: '#/components/schemas/Error'
           example:
             error:
-              code: NOT_FOUND
+              code: VALIDATION_ERROR
               message: 课程名不能为空
               details:
                 field: name
@@ -583,7 +619,7 @@ components:
             $ref: '#/components/schemas/Error'
           example:
             error:
-              code: VALIDATION_ERROR
+              code: NOT_FOUND
               message: 找不到这场考试
               details:
                 exam_id: exam_99
@@ -1022,6 +1058,23 @@ components:
               type: array
               items: { $ref: '#/components/schemas/PlanTask' }
         meta: { $ref: '#/components/schemas/Meta' }
+
+    HealthResponse:
+      type: object
+      required: [data, meta]
+      properties:
+        data:
+          type: object
+          required: [status, database]
+          properties:
+            status:
+              type: string
+              enum: [ok]
+            database:
+              type: string
+              enum: [ok]
+        meta:
+          $ref: '#/components/schemas/Meta'
 
     Meta:
       type: object
