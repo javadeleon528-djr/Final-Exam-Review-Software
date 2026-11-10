@@ -1,42 +1,69 @@
-# test_persist.py
-from datetime import datetime, UTC
+"""验证课程数据在迁移、重连和重复迁移后仍然存在。"""
+
+import tempfile
+import unittest
+from datetime import datetime, timezone
+from pathlib import Path
+from uuid import uuid4
+
+from alembic import command
+from alembic.config import Config
+from sqlalchemy import inspect
 from sqlalchemy.orm import Session
-import uuid
-from db import make_engine
-from models import Course
 
-# 共用同一个数据库地址，只写一次
-DB_URL = "sqlite:///data/study.db"
+from app.db.connection import make_engine
+from app.db.models import Course
 
-# 1. 第一次连接，插入测试课程
-engine = make_engine(DB_URL)
-saved_id = None
-with Session(engine) as session:
-    test_course = Course(
-        id=str(uuid.uuid4()),
-        name="Python数据库开发",
-        description="SQLAlchemy + Alembic小组项目课程",
-        created_at=datetime.now(UTC),
-        archived_at=None
-    )
-    session.add(test_course)
-    session.commit()
-    saved_id = test_course.id
-    print(f"✅ 插入成功，课程id：{saved_id}")
 
-# 释放第一个engine，模拟断开连接
-del engine
+class TestCoursePersistence(unittest.TestCase):
+    def test_course_survives_reconnect_and_repeat_migration(self) -> None:
+        # 每次测试使用独立数据库，避免改动 data/study.db。
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = Path(temp_dir) / "test.db"
+            db_url = f"sqlite:///{db_path.as_posix()}"
 
-# 2. 重新创建新engine、重连数据库
-engine2 = make_engine(DB_URL)
-with Session(engine2) as session2:
-    find_course = session2.get(Course, saved_id)
-    # assert 断言：不满足条件直接报错，程序不会正常退出
-    assert find_course is not None, "❌ 重连后没有找到课程！持久化失败"
-    assert find_course.id == saved_id, "❌ 查询出来的id对不上！"
-    assert find_course.name == "Python数据库开发", "❌ 课程名称不一致！"
+            alembic_ini = Path(__file__).resolve().parents[1] / "alembic.ini"
+            config = Config(str(alembic_ini))
+            config.set_main_option("sqlalchemy.url", db_url)
+            command.upgrade(config, "head")
 
-    print("✅ 断言全部通过！重连后成功查到课程：")
-    print(f"id: {find_course.id}")
-    print(f"name: {find_course.name}")
-    print(f"created_at: {find_course.created_at}")
+            course_id = str(uuid4())
+            engine = make_engine(db_url)
+            try:
+                self.assertIn("courses", inspect(engine).get_table_names())
+                with Session(engine) as session:
+                    session.add(
+                        Course(
+                            id=course_id,
+                            name="Python数据库开发",
+                            description="SQLAlchemy + Alembic 小组项目课程",
+                            created_at=datetime.now(timezone.utc),
+                            archived_at=None,
+                        )
+                    )
+                    session.commit()
+            finally:
+                # Windows 下先关闭连接池，临时目录才能删除数据库文件。
+                engine.dispose()
+
+            engine_after_restart = make_engine(db_url)
+            try:
+                with Session(engine_after_restart) as session:
+                    saved_course = session.get(Course, course_id)
+                    self.assertIsNotNone(saved_course)
+                    self.assertEqual(saved_course.name, "Python数据库开发")
+
+                # 重复执行迁移不应重建表或丢失已有记录。
+                command.upgrade(config, "head")
+                with Session(engine_after_restart) as session:
+                    saved_course = session.get(Course, course_id)
+                    self.assertIsNotNone(saved_course)
+                    self.assertEqual(saved_course.name, "Python数据库开发")
+            finally:
+                engine_after_restart.dispose()
+
+        self.assertFalse(db_path.exists())
+
+
+if __name__ == "__main__":
+    unittest.main()
