@@ -2,9 +2,9 @@ openapi: 3.1.0
 
 info:
   title: 期末复习助手 API
-  version: 0.3.0
+  version: 0.4.0
   description: |
-    T01 阶段的接口契约草案（B2）。覆盖建课、知识点、考试范围、全局日程、计划预览、应用、撤销和任务执行。
+    接口契约草案（B2）；T03 补充来源登记与历史考试范围读取。覆盖建课、知识点、考试范围、全局日程、计划预览、应用、撤销和任务执行。
 
     全文约定（两人必须遵守）：
     1. 字段名一律 snake_case（`exam_date`，不是 `examDate`）
@@ -22,6 +22,8 @@ servers:
 tags:
   - name: courses
     description: 课程
+  - name: sources
+    description: 课程资料来源；T03 仅登记链接与笔记，文件上传和正文提取在 T08
   - name: scopes
     description: 考试范围
   - name: points
@@ -139,6 +141,46 @@ paths:
                     reason: duplicate_name
                     existing_course_id: course_1
                   request_id: req_01
+
+  /courses/{course_id}/sources:
+    get:
+      tags: [sources]
+      operationId: listSources
+      summary: 列出课程已登记的来源
+      parameters:
+        - $ref: '#/components/parameters/CourseId'
+      responses:
+        '200':
+          description: 来源列表；没有来源时返回空数组
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SourceListResponse' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    post:
+      tags: [sources]
+      operationId: registerSource
+      summary: 登记链接或笔记；T03 不抓取网页、不上传文件、不启动提取任务
+      parameters:
+        - $ref: '#/components/parameters/CourseId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SourceRegistrationRequest' }
+            examples:
+              link:
+                value: { kind: link, title: 高数课程网站, uri: 'https://example.edu/math' }
+              note:
+                value: { kind: note, title: 第一章课堂笔记, note_text: 极限的定义与例题 }
+      responses:
+        '201':
+          description: 来源已保存；不表示正文已经提取
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SourceResponse' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '404': { $ref: '#/components/responses/NotFound' }
 
   /exams/{exam_id}/scope-draft:
     get:
@@ -345,9 +387,14 @@ paths:
     get:
       tags: [scopes]
       operationId: getConfirmedScope
-      summary: 读取最新已确认范围；没有确认版时返回 404
+      summary: 读取最新或指定版本的已确认范围
       parameters:
         - $ref: '#/components/parameters/ExamId'
+        - name: version
+          in: query
+          required: false
+          description: 不传则读取最新版；传入正整数可读取历史正式版本
+          schema: { type: integer, minimum: 1 }
       responses:
         '200':
           description: 已确认的不可变范围
@@ -685,27 +732,86 @@ components:
           type: array
           items: { $ref: '#/components/schemas/Course' }
         meta: { $ref: '#/components/schemas/Meta' }
+    SourceRegistrationRequest:
+      oneOf:
+        - $ref: '#/components/schemas/LinkSourceRegistration'
+        - $ref: '#/components/schemas/NoteSourceRegistration'
+      discriminator:
+        propertyName: kind
+        mapping:
+          link: '#/components/schemas/LinkSourceRegistration'
+          note: '#/components/schemas/NoteSourceRegistration'
+    LinkSourceRegistration:
+      type: object
+      required: [kind, title, uri]
+      additionalProperties: false
+      properties:
+        kind: { type: string, const: link }
+        title: { type: string, minLength: 1, maxLength: 200 }
+        uri: { type: string, format: uri, maxLength: 2000 }
+    NoteSourceRegistration:
+      type: object
+      required: [kind, title, note_text]
+      additionalProperties: false
+      properties:
+        kind: { type: string, const: note }
+        title: { type: string, minLength: 1, maxLength: 200 }
+        note_text: { type: string, minLength: 1 }
+    Source:
+      type: object
+      required: [id, course_id, kind, title, status, created_at]
+      properties:
+        id: { type: string }
+        course_id: { type: string }
+        kind: { type: string, enum: [link, note] }
+        title: { type: string }
+        uri: { type: [string, 'null'], format: uri }
+        note_text: { type: [string, 'null'] }
+        status: { type: string, const: registered, description: T03 只登记；提取状态在 T08 扩展 }
+        created_at: { type: string, format: date-time }
+    SourceResponse:
+      type: object
+      required: [data, meta]
+      properties:
+        data: { $ref: '#/components/schemas/Source' }
+        meta: { $ref: '#/components/schemas/Meta' }
+    SourceListResponse:
+      type: object
+      required: [data, meta]
+      properties:
+        data:
+          type: array
+          items: { $ref: '#/components/schemas/Source' }
+        meta: { $ref: '#/components/schemas/Meta' }
     PointCreateRequest:
       type: object
-      required: [name]
+      required: [name, node_type]
       additionalProperties: false
       properties:
         name: { type: string, minLength: 1, maxLength: 160 }
         parent_id: { type: [string, 'null'] }
+        node_type: { type: string, enum: [chapter, point] }
+        sort_order: { type: integer, minimum: 0, default: 0 }
     Point:
       type: object
-      required: [id, course_id, name, self_status, version]
+      required: [id, course_id, name, node_type, sort_order, self_status, version]
+      description: 章节节点的 self_status、ai_status 和 version 均为 null；知识点节点的自评默认 not_started，version 从 1 开始
       properties:
         id: { type: string }
         course_id: { type: string }
         parent_id: { type: [string, 'null'] }
         name: { type: string }
-        self_status: { $ref: '#/components/schemas/MasteryStatus' }
+        node_type: { type: string, enum: [chapter, point] }
+        sort_order: { type: integer, minimum: 0 }
+        self_status:
+          oneOf:
+            - { $ref: '#/components/schemas/MasteryStatus' }
+            - { type: 'null' }
         ai_status:
           oneOf:
             - { $ref: '#/components/schemas/MasteryStatus' }
             - { type: 'null' }
-        version: { type: integer, minimum: 1 }
+        version: { type: [integer, 'null'], minimum: 1, description: 知识点节点的用户档案版本，用于 self-status 的 expected_version }
     MasteryStatus:
       type: string
       enum: [not_started, not_mastered, basic, mastered]

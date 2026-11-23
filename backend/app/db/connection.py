@@ -5,9 +5,14 @@
 """
 
 from sqlalchemy.engine import Engine
-from sqlalchemy import create_engine , text
+from sqlalchemy import create_engine , text , event  # 他是SQLAlchemy提供的时间系统，当数据库发生某个事件的时候，自动执行我们指定的代码
 from sqlalchemy.exc import SQLAlchemyError
 
+def enable_sqlite_foreign_keys(dbapi_connection , connection_record):
+    """每次创建新的 SQLite 连接时，自动开放外键检查"""
+    cursor = dbapi_connection.cursor()
+    cursor.execute("PRAGMA foreign_keys=ON")
+    cursor.close()
 
 def make_engine(database_url: str) -> Engine:
     """按传入的数据库 URL 创建 SQLAlchemy Engine。
@@ -23,6 +28,8 @@ def make_engine(database_url: str) -> Engine:
         raise ValueError("只支持 SqLite ,url 开头必须以sqlite:// 的形式")
     # 创建引擎
     engine = create_engine(database_url)
+    # 监听数据库连接事件，每次创建新的连接时开启外键检查
+    event.listen(engine , "connect" , enable_sqlite_foreign_keys)
     return engine
     
     

@@ -1,10 +1,11 @@
 from logging.config import fileConfig
 
 from sqlalchemy import engine_from_config
-from sqlalchemy import pool
+from sqlalchemy import pool , event
 
 from alembic import context
 from app.db.models import Base
+from app.db.connection import enable_sqlite_foreign_keys
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
@@ -64,7 +65,17 @@ def run_migrations_online() -> None:
         poolclass=pool.NullPool,
     )
 
+    # 每次创建新的 SQLite 连接时，自动开启外键检查
+    event.listen(connectable , "connect" , enable_sqlite_foreign_keys)
+
     with connectable.connect() as connection:
+        # 检察 Alembic 是否开启外键约束
+        # scalar_one():要求查询结果必须得是一行，要不然报错
+        # print(
+        #     "Alembic foreign_keys =",
+        #     connection.exec_driver_sql("PRAGMA foreign_keys").scalar_one()
+        # )
+
         context.configure(
             connection=connection, target_metadata=target_metadata
         )
