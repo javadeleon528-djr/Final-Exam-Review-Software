@@ -8,6 +8,8 @@ dependencies = [
   "sqlalchemy",
   "alembic",
 ]
+[project.optional-dependencies]
+dev = ["httpx"]
 
 [build-system]
 requires = ["setuptools>=61"]
